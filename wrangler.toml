@@ -1,0 +1,25 @@
+# Wrangler configuration for Cloudflare (helps Pages detect Functions)
+# Edit `account_id` if you publish with `wrangler`/CLI. For Cloudflare Pages this file
+# is optional, but including it can assist build tooling and make routes explicit.
+
+name = "asset-tracker"
+# type for runtime
+type = "javascript"
+# Set to today's date (or the date you want compatibility for)
+compatibility_date = "2026-02-03"
+
+# Optional: uncomment and fill when publishing via wrangler CLI
+# account_id = "your-account-id"
+
+# If you need to explicitly define routes (usually not required for Pages Functions),
+# add entries like below. Use the function filename (without extension) as the script name.
+# [[routes]]
+# pattern = "/api/*"
+# script = "openrouter"
+
+# Notes:
+# - For Cloudflare Pages, ensure the `functions/` directory is at the repo root and contains
+#   your function files (e.g., `functions/openrouter.js`). Pages will automatically map
+#   `/api/<filename>` → corresponding function.
+# - If the Pages deployment log still shows "No routes found when building Functions directory",
+#   try adding a tiny `index.js` in `functions/` or ensure files are committed and pushed.
