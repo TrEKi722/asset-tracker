@@ -28,6 +28,8 @@ import {
   writeBatch
 } from 'firebase/firestore';
 
+
+// OpenRouter key removed — use secret `OPENROUTER_API_KEY` in Cloudflare Pages Functions (do NOT commit keys)
 // --- Firebase Configuration & Initialization ---
 const firebaseConfig = {
   apiKey: "AIzaSyDHpydyd3zPnnYwfLJlUXvA4-SihGF00P8",
@@ -73,19 +75,21 @@ const getPermissions = (role) => ({
   canSeeAdminStats: [ROLES.ADMIN, ROLES.SUPER_ADMIN].includes(role)
 });
 
-// --- Gemini API Helper ---
+// --- OpenRouter Proxy Helper (calls Pages Function at /api/openrouter) ---
 const callGemini = async (prompt, systemInstruction = "", jsonMode = false) => {
-  const apiKey = ""; // Injected at runtime
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
-  
+  const url = "/api/openrouter";
+
+  const messages = [];
+  if (systemInstruction) messages.push({ role: 'system', content: systemInstruction });
+  messages.push({ role: 'user', content: prompt });
+
   const payload = {
-    contents: [{ parts: [{ text: prompt }] }],
-    systemInstruction: systemInstruction ? { parts: [{ text: systemInstruction }] } : undefined,
-    generationConfig: jsonMode ? { responseMimeType: "application/json" } : undefined
+    model: "openrouter/free",
+    messages
   };
 
   const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-  
+
   for (let i = 0; i < 3; i++) {
     try {
       const response = await fetch(url, {
@@ -94,10 +98,40 @@ const callGemini = async (prompt, systemInstruction = "", jsonMode = false) => {
         body: JSON.stringify(payload)
       });
 
-      if (!response.ok) throw new Error(`API Error: ${response.status}`);
-      
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        throw new Error(`OpenRouter Proxy Error: ${response.status} ${text}`);
+      }
+
       const data = await response.json();
-      return data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+
+      // Try to extract text content in several possible shapes
+      let content = data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? '';
+
+      // If content is an object with parts (compat for other formats), turn into string
+      if (typeof content === 'object') {
+        if (Array.isArray(content.parts) && content.parts.length) {
+          content = content.parts.map(p => (typeof p === 'string' ? p : (p.text || ''))).join('');
+        } else {
+          try {
+            content = JSON.stringify(content);
+          } catch (e) {
+            content = String(content);
+          }
+        }
+      }
+
+      // For JSON-mode callers we return a JSON string (keeps compatibility with existing callers that do JSON.parse(res))
+      if (jsonMode) {
+        try {
+          const parsed = typeof content === 'string' ? JSON.parse(content) : content;
+          return JSON.stringify(parsed);
+        } catch (e) {
+          return content;
+        }
+      }
+
+      return content || '';
     } catch (err) {
       if (i === 2) throw err;
       await delay(1000 * Math.pow(2, i)); // Backoff: 1s, 2s, 4s
