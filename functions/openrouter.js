@@ -1,4 +1,4 @@
-export default async function (request, env) {
+async function handler(request, env) {
   const CORS_HEADERS = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -73,4 +73,12 @@ export default async function (request, env) {
   } catch (err) {
     return new Response(JSON.stringify({ error: 'Request to OpenRouter failed', details: err.message }), { status: 502, headers: CORS_HEADERS });
   }
+}
+
+export default handler;
+
+// Also export `onRequest` for any runtime that expects it
+export async function onRequest(context) {
+  const { request, env } = context;
+  return handler(request, env);
 }
