@@ -6,9 +6,25 @@ export default async function (request, env) {
     'Content-Type': 'application/json'
   };
 
+  const url = new URL(request.url);
+  const path = url.pathname || '';
+
   // Handle preflight
   if (request.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
+  }
+
+  // Diagnostic endpoint: /api/openrouter/diag
+  if (path.endsWith('/diag')) {
+    const hasKey = !!env.OPENROUTER_API_KEY;
+    const info = {
+      ok: true,
+      service: 'openrouter-proxy',
+      hasKey,
+      receivedMethod: request.method,
+      now: new Date().toISOString()
+    };
+    return new Response(JSON.stringify(info), { status: 200, headers: CORS_HEADERS });
   }
 
   // Health-check
