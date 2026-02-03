@@ -100,7 +100,12 @@ const callGemini = async (prompt, systemInstruction = "", jsonMode = false) => {
 
       if (!response.ok) {
         const text = await response.text().catch(() => '');
-        throw new Error(`OpenRouter Proxy Error: ${response.status} ${text}`);
+        let parsed;
+        try { parsed = JSON.parse(text); } catch (e) { parsed = text; }
+        const err = new Error(`OpenRouter Proxy Error: ${response.status}`);
+        err.status = response.status;
+        err.body = parsed;
+        throw err;
       }
 
       const data = await response.json();
@@ -133,6 +138,8 @@ const callGemini = async (prompt, systemInstruction = "", jsonMode = false) => {
 
       return content || '';
     } catch (err) {
+      // Don't retry on 405 Method Not Allowed — it's a proxy configuration issue
+      if (err?.status === 405) throw err;
       if (i === 2) throw err;
       await delay(1000 * Math.pow(2, i)); // Backoff: 1s, 2s, 4s
     }
@@ -473,7 +480,7 @@ const DeleteConfirmModal = ({ item, onConfirm, onCancel }) => (
 );
 
 // 6. Ask AI Modal
-const AskAIModal = ({ inventory, onClose }) => {
+const AskAIModal = ({ inventory, onClose, onAIError }) => {
   const [question, setQuestion] = useState('');
   const [answer, setAnswer] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -498,8 +505,14 @@ const AskAIModal = ({ inventory, onClose }) => {
       const response = await callGemini(question, systemPrompt, false);
       setAnswer(response);
     } catch (err) {
-      setAnswer("Sorry, I couldn't process that request right now.");
       console.error(err);
+      if (err?.status === 405) {
+        onAIError?.({ status: err.status, message: 'OpenRouter proxy returned 405 Method Not Allowed', details: err.body || err.message });
+        setAnswer('AI service unavailable (Method Not Allowed). Please check server-side proxy configuration.');
+      } else {
+        onAIError?.({ status: err?.status || 0, message: 'AI request failed', details: err?.body || err?.message });
+        setAnswer("Sorry, I couldn't process that request right now.");
+      }
     } finally {
       setIsLoading(false);
     }
@@ -552,7 +565,7 @@ const AskAIModal = ({ inventory, onClose }) => {
 };
 
 // 7. CSV Import Modal
-const CSVImportModal = ({ onClose, onImport }) => {
+const CSVImportModal = ({ onClose, onImport, onAIError }) => {
   const [preview, setPreview] = useState([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState('');
@@ -648,6 +661,13 @@ const CSVImportModal = ({ onClose, onImport }) => {
           }
         } catch (e) {
           console.error(`Batch ${batchIndex} failed`, e);
+          if (e?.status === 405) {
+            onAIError?.({ status: e.status, message: 'OpenRouter proxy returned 405 Method Not Allowed', details: e.body || e.message });
+            setError('AI service returned Method Not Allowed. Halting auto-generation.');
+            break;
+          } else {
+            setError(`AI batch ${batchIndex} failed: ${e?.message || 'Unknown error'}`);
+          }
         }
       }
     }
@@ -756,7 +776,7 @@ const CSVImportModal = ({ onClose, onImport }) => {
 };
 
 // 8. Asset Action Modal (Modified for Roles)
-const AssetActionModal = ({ assetId, existingAsset, userProfile, initialEditMode = false, initialDuplicateMode = false, onClose, onSave }) => {
+const AssetActionModal = ({ assetId, existingAsset, userProfile, initialEditMode = false, initialDuplicateMode = false, onClose, onSave, onAIError }) => {
   const permissions = getPermissions(userProfile.role);
   
   const getNextId = (originalId) => {
@@ -816,7 +836,12 @@ const AssetActionModal = ({ assetId, existingAsset, userProfile, initialEditMode
       if (data.maintenance) setMaintenance(data.maintenance);
     } catch (e) {
       console.error("Gemini Error:", e);
-      setError("Failed to generate details. Try again.");
+      if (e?.status === 405) {
+        onAIError?.({ status: e.status, message: 'OpenRouter proxy returned 405 Method Not Allowed', details: e.body || e.message });
+        setError('AI service unavailable (Method Not Allowed). Contact admin or check proxy.');
+      } else {
+        setError("Failed to generate details. Try again.");
+      }
     } finally {
       setIsGenerating(false);
     }
@@ -1161,6 +1186,7 @@ export default function AssetTrackerApp() {
   const [isDuplicateMode, setIsDuplicateMode] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState(null);
+  const [aiError, setAIError] = useState(null);
 
   // 1. Auth Logic - Real Firebase Auth (Restored)
   useEffect(() => {
@@ -1498,6 +1524,22 @@ export default function AssetTrackerApp() {
         </div>
       </header>
 
+      {aiError && (
+        <div className="max-w-5xl mx-auto p-4">
+          <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded-md flex items-start justify-between gap-4">
+            <div>
+              <p className="font-medium text-yellow-800">{aiError.message || 'AI Service Error'}</p>
+              {aiError.details && <pre className="text-xs text-yellow-700 mt-1 whitespace-pre-wrap">{typeof aiError.details === 'string' ? aiError.details : JSON.stringify(aiError.details)}</pre>}
+            </div>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <button onClick={async () => { try { const res = await fetch('/api/openrouter'); const j = await res.json(); alert(JSON.stringify(j)); } catch (e) { alert('Health check failed: ' + e.message); } }} className="px-3 py-2 bg-yellow-400 text-yellow-900 rounded font-medium">Health Check</button>
+              <button onClick={() => window.location.reload()} className="px-3 py-2 bg-yellow-50 border rounded">Retry (Reload)</button>
+              <button onClick={() => { setAIError(null); }} className="px-3 py-2 bg-white border rounded">Dismiss</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <main className="max-w-5xl mx-auto p-4 space-y-6">
         
         {/* Navigation Tabs */}
@@ -1730,9 +1772,9 @@ export default function AssetTrackerApp() {
       {/* Modals */}
       {showScanner && <BarcodeScanner onScan={handleScan} onClose={() => setShowScanner(false)} />}
       
-      {showAIModal && <AskAIModal inventory={inventory} onClose={() => setShowAIModal(false)} />}
+      {showAIModal && <AskAIModal inventory={inventory} onClose={() => setShowAIModal(false)} onAIError={setAIError} />}
 
-      {showCSVModal && permissions.canManageInventory && <CSVImportModal onClose={() => setShowCSVModal(false)} onImport={importCSVData} />}
+      {showCSVModal && permissions.canManageInventory && <CSVImportModal onClose={() => setShowCSVModal(false)} onImport={importCSVData} onAIError={setAIError} />}
 
       {activeAssetId !== null && (
         <AssetActionModal 
@@ -1743,6 +1785,7 @@ export default function AssetTrackerApp() {
           initialDuplicateMode={isDuplicateMode}
           onClose={() => { setActiveAssetId(null); setIsDuplicateMode(false); }}
           onSave={saveAsset}
+          onAIError={setAIError}
         />
       )}
 

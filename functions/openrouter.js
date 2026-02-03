@@ -17,7 +17,8 @@ export default async function (request, env) {
   }
 
   if (request.method !== 'POST') {
-    return new Response(JSON.stringify({ error: 'Method Not Allowed' }), { status: 405, headers: CORS_HEADERS });
+    const headers = { ...CORS_HEADERS, 'Allow': 'GET, POST, OPTIONS' };
+    return new Response(JSON.stringify({ error: 'Method Not Allowed', receivedMethod: request.method }), { status: 405, headers });
   }
 
   const apiKey = env.OPENROUTER_API_KEY;
